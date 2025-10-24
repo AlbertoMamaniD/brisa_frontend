@@ -1,110 +1,113 @@
-<script>
+<script lang="ts">
+  import { onMount } from 'svelte';
+  import { apiClient } from '$lib/services/api.js';
+  import type { EsquelaResponse, CodigoEsquela } from '$lib/types/api.js';
+  import CreateEsquelaModal from '$lib/components/CreateEsquelaModal.svelte';
+
   let searchQuery = '';
-  
-  const esquelas = [
-    {
-      id: 1,
-      tipo: 'Académica',
-      icono: '🏆',
-      titulo: 'Excelencia Académica',
-      estudiante: 'Diego Torres',
-      curso: '3ro B',
-      descripcion: 'Primer puesto en concurso de matemáticas regional',
-      emitidoPor: 'Prof. Carlos Mendoza',
-      fecha: '20 de octubre',
-      color: 'cyan'
-    },
-    {
-      id: 2,
-      tipo: 'Comportamiento',
-      icono: '❤️',
-      titulo: 'Comportamiento Ejemplar',
-      estudiante: 'Valentina Paz',
-      curso: '4to B',
-      descripcion: 'Demostró solidaridad y ayuda constante a sus compañeros durante todo el trimestre',
-      emitidoPor: 'Prof. Ana López',
-      fecha: '19 de octubre',
-      color: 'gray'
-    },
-    {
-      id: 3,
-      tipo: 'Participación',
-      icono: '⭐',
-      titulo: 'Participación Destacada',
-      estudiante: 'Sofía Martínez',
-      curso: '5to A',
-      descripcion: 'Liderazgo sobresaliente en proyecto de ciencias',
-      emitidoPor: 'Prof. Roberto Silva',
-      fecha: '18 de octubre',
-      color: 'cyan'
-    },
-    {
-      id: 4,
-      tipo: 'Deportiva',
-      icono: '🥇',
-      titulo: 'Excelencia Deportiva',
-      estudiante: 'Lucas Ramírez',
-      curso: '2do A',
-      descripcion: 'Medalla de oro en competencia atlética departamental',
-      emitidoPor: 'Prof. María Gutiérrez',
-      fecha: '17 de octubre',
-      color: 'gray'
-    },
-    {
-      id: 5,
-      tipo: 'Especial',
-      icono: '🎖️',
-      titulo: 'Reconocimiento Especial',
-      estudiante: 'Camila Flores',
-      curso: '6to C',
-      descripcion: 'Iniciativa comunitaria excepcional',
-      emitidoPor: 'Directora General',
-      fecha: '16 de octubre',
-      color: 'gray'
-    },
-    {
-      id: 6,
-      tipo: 'Participación',
-      icono: '⭐',
-      titulo: 'Excelencia Académica',
-      estudiante: 'Andrés Vega',
-      curso: '1ro B',
-      descripcion: 'Destacado en feria de ciencias nacional',
-      emitidoPor: 'Prof. Luis Morales',
-      fecha: '15 de octubre',
-      color: 'cyan'
+  let esquelas: EsquelaResponse[] = [];
+  let codigos: CodigoEsquela[] = [];
+  let loading = true;
+  let error = '';
+  let showCreateModal = false;
+
+  // Mapeo de códigos a iconos y tipos
+  const tipoIconos: Record<string, string> = {
+    'reconocimiento': '🏆',
+    'orientacion': '📋',
+    'academico': '📚',
+    'deportivo': '🥇',
+    'comportamiento': '❤️',
+    'participacion': '⭐'
+  };
+
+  let categoriaSeleccionada: string | null = null;
+
+  onMount(async () => {
+    await cargarDatos();
+  });
+
+  async function cargarDatos() {
+    try {
+      loading = true;
+      const [esquelasData, codigosData] = await Promise.all([
+        apiClient.getEsquelas(),
+        apiClient.getCodigosEsquelas()
+      ]);
+      esquelas = esquelasData;
+      codigos = codigosData;
+      error = '';
+    } catch (err: any) {
+      console.error('Error cargando datos:', err);
+      error = err.message || 'Error cargando datos';
+    } finally {
+      loading = false;
     }
-  ];
+  }
 
-  const categorias = [
-    { nombre: 'Académica', cantidad: 2, icono: '🏆' },
-    { nombre: 'Comportamiento', cantidad: 1, icono: '❤️' },
-    { nombre: 'Participación', cantidad: 1, icono: '⭐' },
-    { nombre: 'Deportiva', cantidad: 1, icono: '🥇' },
-    { nombre: 'Especial', cantidad: 1, icono: '🎖️' }
-  ];
+  function obtenerCategorias() {
+    const categoriaCount: Record<string, number> = {};
+    
+    esquelas.forEach(esquela => {
+      esquela.codigos.forEach(codigo => {
+        const tipo = codigo.tipo;
+        categoriaCount[tipo] = (categoriaCount[tipo] || 0) + 1;
+      });
+    });
 
-  let categoriaSeleccionada = null;
+    return Object.entries(categoriaCount).map(([nombre, cantidad]) => ({
+      nombre,
+      cantidad,
+      icono: tipoIconos[nombre] || '📄'
+    }));
+  }
 
   function filtrarEsquelas() {
     let filtradas = esquelas;
     
     if (categoriaSeleccionada) {
-      filtradas = filtradas.filter(e => e.tipo === categoriaSeleccionada);
+      filtradas = filtradas.filter(esquela => 
+        esquela.codigos.some(codigo => codigo.tipo === categoriaSeleccionada)
+      );
     }
     
     if (searchQuery) {
-      filtradas = filtradas.filter(e => 
-        e.estudiante.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        e.titulo.toLowerCase().includes(searchQuery.toLowerCase())
+      filtradas = filtradas.filter(esquela => 
+        esquela.observaciones.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        esquela.codigos.some(codigo => 
+          codigo.descripcion.toLowerCase().includes(searchQuery.toLowerCase())
+        )
       );
     }
     
     return filtradas;
   }
 
-  function seleccionarCategoria(categoria) {
+  function seleccionarCategoria(categoria: string) {
     categoriaSeleccionada = categoriaSeleccionada === categoria ? null : categoria;
+  }
+
+  function formatearFecha(fecha: string) {
+    return new Date(fecha).toLocaleDateString('es-ES', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric'
+    });
+  }
+
+  function obtenerPrimerCodigo(esquela: EsquelaResponse) {
+    return esquela.codigos[0] || { tipo: 'general', descripcion: 'Sin código', codigo: '' };
+  }
+
+  async function eliminarEsquela(id: number) {
+    if (confirm('¿Está seguro de que desea eliminar esta esquela?')) {
+      try {
+        await apiClient.deleteEsquela(id);
+        await cargarDatos(); // Recargar datos
+      } catch (err: any) {
+        alert('Error eliminando esquela: ' + err.message);
+      }
+    }
   }
 </script>
 
@@ -115,69 +118,111 @@
       <h1 class="titulo">Esquelas y Reconocimientos</h1>
       <p class="subtitulo">Registra reconocimientos y felicitaciones estudiantiles</p>
     </div>
-    <button class="btn-nueva">
+    <button class="btn-nueva" on:click={() => showCreateModal = true}>
       <span class="plus">+</span>
       Nueva Esquela
     </button>
   </div>
 
-  <!-- Categorías -->
-  <div class="categorias">
-    {#each categorias as categoria}
-      <button 
-        class="categoria-card"
-        class:active={categoriaSeleccionada === categoria.nombre}
-        on:click={() => seleccionarCategoria(categoria.nombre)}
-      >
-        <div class="categoria-header">
-          <span class="categoria-titulo">{categoria.nombre}</span>
-          <span class="categoria-icono">{categoria.icono}</span>
-        </div>
-        <span class="categoria-cantidad">{categoria.cantidad}</span>
-      </button>
-    {/each}
-  </div>
-
-  <!-- Buscador -->
-  <div class="buscador">
-    <span class="icono-buscar">🔍</span>
-    <input 
-      type="text" 
-      placeholder="Buscar por estudiante o tipo de reconocimiento..."
-      bind:value={searchQuery}
-    />
-  </div>
-
-  <!-- Grid de Esquelas -->
-  <div class="esquelas-grid">
-    {#each filtrarEsquelas() as esquela}
-      <div class="esquela-card" class:cyan={esquela.color === 'cyan'}>
-        <div class="esquela-header">
-          <span class="esquela-icono">{esquela.icono}</span>
-          <span class="esquela-fecha">{esquela.fecha}</span>
-        </div>
-        
-        <h3 class="esquela-titulo">{esquela.titulo}</h3>
-        
-        <div class="esquela-info">
-          <div class="info-item">
-            <span class="info-label">Estudiante:</span>
-            <span class="info-valor">{esquela.estudiante}</span>
+  {#if loading}
+    <div class="loading">
+      <div class="spinner"></div>
+      <p>Cargando esquelas...</p>
+    </div>
+  {:else if error}
+    <div class="error">
+      <p>❌ {error}</p>
+      <button class="btn-retry" on:click={cargarDatos}>Reintentar</button>
+    </div>
+  {:else}
+    <!-- Categorías -->
+    <div class="categorias">
+      {#each obtenerCategorias() as categoria}
+        <button 
+          class="categoria-card"
+          class:active={categoriaSeleccionada === categoria.nombre}
+          on:click={() => seleccionarCategoria(categoria.nombre)}
+        >
+          <div class="categoria-header">
+            <span class="categoria-titulo">{categoria.nombre}</span>
+            <span class="categoria-icono">{categoria.icono}</span>
           </div>
-          <div class="info-item">
-            <span class="info-label">Curso:</span>
-            <span class="info-valor">{esquela.curso}</span>
+          <span class="categoria-cantidad">{categoria.cantidad}</span>
+        </button>
+      {/each}
+    </div>
+
+    <!-- Buscador -->
+    <div class="buscador">
+      <span class="icono-buscar">🔍</span>
+      <input 
+        type="text" 
+        placeholder="Buscar por observaciones o tipo de código..."
+        bind:value={searchQuery}
+      />
+    </div>
+
+    <!-- Grid de Esquelas -->
+    <div class="esquelas-grid">
+      {#each filtrarEsquelas() as esquela}
+        {@const primerCodigo = obtenerPrimerCodigo(esquela)}
+        <div class="esquela-card" class:reconocimiento={primerCodigo.tipo === 'reconocimiento'}>
+          <div class="esquela-header">
+            <span class="esquela-icono">{tipoIconos[primerCodigo.tipo] || '📄'}</span>
+            <span class="esquela-fecha">{formatearFecha(esquela.fecha)}</span>
+          </div>
+          
+          <h3 class="esquela-titulo">{primerCodigo.descripcion}</h3>
+          
+          <div class="esquela-info">
+            <div class="info-item">
+              <span class="info-label">Código:</span>
+              <span class="info-valor">{primerCodigo.codigo}</span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">Tipo:</span>
+              <span class="info-valor">{primerCodigo.tipo}</span>
+            </div>
+          </div>
+          
+          <p class="esquela-descripcion">{esquela.observaciones}</p>
+          
+          {#if esquela.codigos.length > 1}
+            <div class="codigos-adicionales">
+              <span class="codigos-label">Códigos adicionales:</span>
+              {#each esquela.codigos.slice(1) as codigo}
+                <span class="codigo-tag">{codigo.codigo}</span>
+              {/each}
+            </div>
+          {/if}
+          
+          <div class="esquela-footer">
+            <span class="esquela-id">ID: {esquela.id_esquela}</span>
+            <button 
+              class="btn-eliminar"
+              on:click={() => eliminarEsquela(esquela.id_esquela)}
+              title="Eliminar esquela"
+            >
+              🗑️
+            </button>
           </div>
         </div>
-        
-        <p class="esquela-descripcion">{esquela.descripcion}</p>
-        
-        <div class="esquela-footer">
-          <span class="emitido">Emitido por: <strong>{esquela.emitidoPor}</strong></span>
+      {/each}
+
+      {#if filtrarEsquelas().length === 0}
+        <div class="no-results">
+          <p>No se encontraron esquelas que coincidan con los filtros.</p>
         </div>
-      </div>
-    {/each}
-  </div>
+      {/if}
+    </div>
+  {/if}
+
+  <!-- Modal para crear esquela -->
+  <CreateEsquelaModal 
+    bind:show={showCreateModal} 
+    {codigos}
+    on:created={cargarDatos}
+  />
 </div>
 
 <style>
@@ -331,9 +376,113 @@
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
   }
 
-  .esquela-card.cyan {
+  .esquela-card.reconocimiento {
     border-color: #22d3ee;
     background: linear-gradient(135deg, rgba(34, 211, 238, 0.05) 0%, white 100%);
+  }
+
+  .loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 4rem;
+    color: #64748b;
+  }
+
+  .spinner {
+    width: 40px;
+    height: 40px;
+    border: 4px solid #e2e8f0;
+    border-top: 4px solid #22d3ee;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-bottom: 1rem;
+  }
+
+  @keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+
+  .error {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 2rem;
+    background: #fef2f2;
+    border: 2px solid #fca5a5;
+    border-radius: 12px;
+    margin: 2rem 0;
+  }
+
+  .error p {
+    color: #dc2626;
+    margin: 0 0 1rem 0;
+  }
+
+  .btn-retry {
+    background: #dc2626;
+    color: white;
+    border: none;
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.9rem;
+  }
+
+  .btn-retry:hover {
+    background: #b91c1c;
+  }
+
+  .codigos-adicionales {
+    margin: 1rem 0;
+    padding-top: 1rem;
+    border-top: 1px solid #e2e8f0;
+  }
+
+  .codigos-label {
+    display: block;
+    font-size: 0.8rem;
+    color: #64748b;
+    margin-bottom: 0.5rem;
+  }
+
+  .codigo-tag {
+    display: inline-block;
+    background: #f1f5f9;
+    color: #475569;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    margin-right: 0.5rem;
+    margin-bottom: 0.25rem;
+  }
+
+  .btn-eliminar {
+    background: none;
+    border: none;
+    font-size: 1.2rem;
+    cursor: pointer;
+    padding: 0.25rem;
+    border-radius: 4px;
+    transition: background-color 0.2s;
+  }
+
+  .btn-eliminar:hover {
+    background: #fef2f2;
+  }
+
+  .esquela-id {
+    font-size: 0.8rem;
+    color: #94a3b8;
+  }
+
+  .no-results {
+    grid-column: 1 / -1;
+    text-align: center;
+    padding: 4rem;
+    color: #64748b;
   }
 
   .esquela-header {
@@ -402,14 +551,10 @@
   .esquela-footer {
     padding-top: 1rem;
     border-top: 1px solid #e2e8f0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
   }
 
-  .emitido {
-    font-size: 0.85rem;
-    color: #64748b;
-  }
 
-  .emitido strong {
-    color: #1e293b;
-  }
 </style>
