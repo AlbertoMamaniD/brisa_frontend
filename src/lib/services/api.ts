@@ -37,7 +37,8 @@ class ApiClient {
   ): Promise<T> {
     const url = `${this.baseURL}${endpoint}`;
     
-    const token = localStorage.getItem('token');
+    // Obtener token del localStorage
+    const token = typeof window !== 'undefined' ? localStorage.getItem('brisa_auth_token') : null;
     
     const defaultHeaders: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -59,6 +60,15 @@ class ApiClient {
       const response = await fetch(url, config);
       
       if (!response.ok) {
+        if (response.status === 401) {
+          // Token inválido o expirado - redirigir a login
+          if (typeof window !== 'undefined') {
+            localStorage.removeItem('brisa_auth_token');
+            localStorage.removeItem('brisa_user_data');
+            window.location.href = '/login';
+          }
+        }
+        
         const errorData = await response.json().catch(() => ({}));
         throw {
           message: errorData.message || `HTTP Error: ${response.status}`,

@@ -1,6 +1,53 @@
 <script lang="ts">
-    import { onMount } from 'svelte';
-    import { apiClient } from '$lib/services/api';
+  import { onMount } from 'svelte';
+  import { authService } from '$lib/services/auth.js';
+
+  onMount(() => {
+    // Redirigir directamente a esquelas si está autenticado
+    if (authService.isAuthenticated()) {
+      window.location.href = '/esquelas';
+    } else {
+      window.location.href = '/login';
+    }
+  });
+</script>
+
+<div class="loading-container">
+  <div class="spinner"></div>
+  <p>Redirigiendo...</p>
+</div>
+
+<style>
+  .loading-container {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+  }
+
+  .spinner {
+    width: 50px;
+    height: 50px;
+    border: 4px solid rgba(255, 255, 255, 0.3);
+    border-top: 4px solid white;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-bottom: 1rem;
+  }
+
+  @keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+
+  p {
+    font-size: 1.1rem;
+    margin: 0;
+  }
+</style>
 
     let currentYear = new Date().getFullYear();
     let isVisible = false;
@@ -27,12 +74,10 @@
     let errorMsg: string | null = null;
 
     onMount(async () => {
-        setTimeout(() => {
-            isVisible = true;
-        }, 100);
+        await new Promise(resolve => setTimeout(resolve, 100));
+        isVisible = true;
 
         await loadCourses();
-        // load initial aggregates (year)
         await loadAggregateByCourse();
         await loadAggregateByPeriod('year');
     });

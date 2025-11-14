@@ -1,23 +1,29 @@
 <script lang="ts">
   import { createEventDispatcher, onMount } from 'svelte';
   import { apiClient } from '$lib/services/api.js';
-  import type { EsquelaCreate, CodigoEsquela, Estudiante, Profesor, Registrador } from '$lib/types/api.js';
+  import { authService } from '$lib/services/auth.js';
+  import type { EsquelaCreate, CodigoEsquela, Estudiante, Profesor } from '$lib/types/api.js';
 
   export let show = false;
   export let codigos: CodigoEsquela[] = [];
 
   const dispatch = createEventDispatcher();
 
+  // Obtener usuario actual
+  let currentUser = authService.getUserData();
+  let userRole = currentUser?.roles?.[0]?.nombre || '';
+  let isProfesor = userRole === 'Profesor';
+  let isAdmin = userRole === 'Administrativo';
+  let isRegente = userRole === 'Regente';
+
   // Listas para los dropdowns
   let estudiantes: Estudiante[] = [];
   let profesores: Profesor[] = [];
-  let registradores: Registrador[] = [];
   let cursos: any[] = [];
 
   // Campos del formulario
   let idEstudiante = 0;
   let idProfesor = 0;
-  let idRegistrador = 0;
   let fecha = new Date().toISOString().split('T')[0];
   let observaciones = '';
   let codigosSeleccionados: number[] = [];
@@ -25,19 +31,36 @@
   // Estados de búsqueda
   let searchEstudiante = '';
   let searchProfesor = '';
-  let searchRegistrador = '';
-  let filtroCurso: number | null = null; // Filtro por curso
+  let filtroCurso: number | null = null; // Curso seleccionado
   let showEstudianteDropdown = false;
   let showProfesorDropdown = false;
-  let showRegistradorDropdown = false;
 
   // Selecciones actuales
   let estudianteSeleccionado: Estudiante | null = null;
   let profesorSeleccionado: Profesor | null = null;
-  let registradorSeleccionado: Registrador | null = null;
+
+  // Mostrar/ocultar campo profesor según rol
+  let mostrarCampoProfesor = !isProfesor;
 
   let loading = false;
   let error = '';
+
+  // Variables reactivas para los dropdowns filtrados
+  $: estudiantesFiltrados = searchEstudiante 
+    ? estudiantes.filter(est => {
+        const nombreCompleto = est.nombre_completo || '';
+        const ci = est.ci || '';
+        return nombreCompleto.toLowerCase().includes(searchEstudiante.toLowerCase()) ||
+               ci.includes(searchEstudiante);
+      }).slice(0, 10)
+    : estudiantes.slice(0, 10);
+
+  $: profesoresFiltrados = searchProfesor
+    ? profesores.filter(prof => 
+        prof.nombre_completo.toLowerCase().includes(searchProfesor.toLowerCase()) ||
+        prof.ci.includes(searchProfesor)
+      ).slice(0, 10)
+    : profesores.slice(0, 10);
 
   $: if (show) {
     cargarListas();
@@ -45,17 +68,37 @@
 
   async function cargarListas() {
     try {
-      const [estudiantesData, profesoresData, registradoresData, cursosData] = await Promise.all([
-        apiClient.getEstudiantes(),
-        apiClient.getProfesores(),
-        apiClient.getRegistradores(),
-        apiClient.getCourses()
-      ]);
-      
-      estudiantes = estudiantesData;
-      profesores = profesoresData;
-      registradores = registradoresData;
+      // Cargar cursos según el rol
+      let cursosData;
+      if (isProfesor) {
+        // Obtener id_persona del profesor
+        let idPersona = currentUser?.id_persona;
+        
+        // Si no tenemos id_persona, buscar por CI en la lista de profesores
+        if (!idPersona && currentUser?.ci) {
+          const profesoresData = await apiClient.getProfesores();
+          const profesorEncontrado = profesoresData.find((p: any) => p.ci === currentUser.ci);
+          if (profesorEncontrado) {
+            idPersona = profesorEncontrado.id_persona;
+          }
+        }
+        
+        if (idPersona) {
+          cursosData = await apiClient.get(`/courses/teacher/${idPersona}/courses`);
+        } else {
+          error = 'No se pudo cargar los cursos del profesor';
+          return;
+        }
+      } else {
+        cursosData = await apiClient.getCourses();
+      }
       cursos = Array.isArray(cursosData) ? cursosData : [];
+
+      // Para Regente y Administrativo, cargar lista de profesores
+      if (!isProfesor) {
+        const profesoresData = await apiClient.getProfesores();
+        profesores = profesoresData;
+      }
     } catch (err: any) {
       console.error('Error cargando listas:', err);
       error = err.message;
@@ -64,48 +107,79 @@
 
   async function cargarEstudiantesPorCurso(cursoId: number) {
     try {
-      const estudiantesDelCurso = await apiClient.get(`/courses/${cursoId}/students`);
-      estudiantes = Array.isArray(estudiantesDelCurso) ? estudiantesDelCurso : [];
+      const response = await apiClient.get(`/courses/${cursoId}/students?page=1&page_size=1000`);
+      console.log('📦 Response completo:', response);
+      
+      // Extraer estudiantes según el formato de respuesta
+      let estudiantesData = [];
+      
+      if (Array.isArray(response)) {
+        estudiantesData = response;
+      } else if (response && typeof response === 'object') {
+        if ('data' in response && Array.isArray(response.data)) {
+          estudiantesData = response.data;
+        } else if ('items' in response && Array.isArray(response.items)) {
+          estudiantesData = response.items;
+        } else if ('estudiantes' in response && Array.isArray(response.estudiantes)) {
+          estudiantesData = response.estudiantes;
+        }
+      }
+      
+      console.log('📊 estudiantesData extraído:', estudiantesData);
+      
+      // Construir nombre_completo si no existe
+      estudiantes = estudiantesData.map((est: any) => {
+        if (!est.nombre_completo && est.nombres) {
+          est.nombre_completo = `${est.nombres} ${est.apellido_paterno || ''} ${est.apellido_materno || ''}`.trim();
+        }
+        return est;
+      });
+      
+      console.log('✅ Array estudiantes final:', estudiantes.length, estudiantes);
+      
+      // Forzar actualización del estado reactivo
+      estudiantes = [...estudiantes];
+      
+      // Abrir dropdown automáticamente si hay estudiantes
+      if (estudiantes.length > 0) {
+        showEstudianteDropdown = true;
+      }
+      
+      // Limpiar error siempre al cargar estudiantes exitosamente
+      error = '';
     } catch (err: any) {
-      console.error('Error cargando estudiantes del curso:', err);
+      console.error('❌ Error cargando estudiantes:', err);
+      error = `Error al cargar estudiantes: ${err.message}`;
+      estudiantes = [];
     }
   }
 
   async function handleCursoChange() {
+    // Limpiar selección de estudiante al cambiar curso
+    deseleccionarEstudiante();
+    
     if (filtroCurso) {
       await cargarEstudiantesPorCurso(filtroCurso);
     } else {
       // Recargar todos los estudiantes
-      const estudiantesData = await apiClient.getEstudiantes();
-      estudiantes = estudiantesData;
+      try {
+        const estudiantesData = await apiClient.getEstudiantes();
+        // Construir nombre_completo si no existe
+        estudiantes = estudiantesData.map((est: any) => {
+          if (!est.nombre_completo && est.nombres) {
+            est.nombre_completo = `${est.nombres} ${est.apellido_paterno || ''} ${est.apellido_materno || ''}`.trim();
+          }
+          return est;
+        });
+        error = '';
+      } catch (err: any) {
+        console.error('Error cargando todos los estudiantes:', err);
+        estudiantes = [];
+      }
     }
-    // Limpiar selección de estudiante al cambiar curso
-    deseleccionarEstudiante();
   }
 
-  function filtrarEstudiantes() {
-    if (!searchEstudiante) return estudiantes.slice(0, 10);
-    return estudiantes.filter(est => 
-      est.nombre_completo.toLowerCase().includes(searchEstudiante.toLowerCase()) ||
-      est.ci.includes(searchEstudiante)
-    ).slice(0, 10);
-  }
 
-  function filtrarProfesores() {
-    if (!searchProfesor) return profesores.slice(0, 10);
-    return profesores.filter(prof => 
-      prof.nombre_completo.toLowerCase().includes(searchProfesor.toLowerCase()) ||
-      prof.ci.includes(searchProfesor)
-    ).slice(0, 10);
-  }
-
-  function filtrarRegistradores() {
-    if (!searchRegistrador) return registradores.slice(0, 10);
-    return registradores.filter(reg => 
-      reg.nombre_completo.toLowerCase().includes(searchRegistrador.toLowerCase()) ||
-      reg.ci.includes(searchRegistrador)
-    ).slice(0, 10);
-  }
 
   function seleccionarEstudiante(estudiante: Estudiante) {
     estudianteSeleccionado = estudiante;
@@ -133,19 +207,6 @@
     searchProfesor = '';
   }
 
-  function seleccionarRegistrador(registrador: Registrador) {
-    registradorSeleccionado = registrador;
-    idRegistrador = registrador.id_persona;
-    searchRegistrador = registrador.nombre_completo;
-    showRegistradorDropdown = false;
-  }
-
-  function deseleccionarRegistrador() {
-    registradorSeleccionado = null;
-    idRegistrador = 0;
-    searchRegistrador = '';
-  }
-
   function toggleCodigo(codigoId: number) {
     if (codigosSeleccionados.includes(codigoId)) {
       codigosSeleccionados = codigosSeleccionados.filter(id => id !== codigoId);
@@ -155,23 +216,38 @@
   }
 
   async function crearEsquela() {
-    if (!idEstudiante || !idProfesor || !observaciones || codigosSeleccionados.length === 0) {
-      error = 'Todos los campos son obligatorios';
-      return;
+    // Validar campos según el rol
+    if (isProfesor) {
+      // Profesor no necesita seleccionar profesor (backend lo asigna automáticamente)
+      if (!idEstudiante || !observaciones || codigosSeleccionados.length === 0) {
+        error = 'Todos los campos son obligatorios';
+        return;
+      }
+    } else {
+      // Regente/Administrativo necesitan seleccionar profesor
+      if (!idEstudiante || !idProfesor || !observaciones || codigosSeleccionados.length === 0) {
+        error = 'Todos los campos son obligatorios';
+        return;
+      }
     }
 
     try {
       loading = true;
       error = '';
 
-      await apiClient.createEsquela({
+      const payload: any = {
         id_estudiante: idEstudiante,
-        id_profesor: idProfesor,
-        id_registrador: idRegistrador,
         fecha: fecha + 'T00:00:00.000Z',
         observaciones,
         codigos: codigosSeleccionados
-      });
+      };
+
+      // Solo incluir id_profesor si no es Profesor (Regente/Administrativo)
+      if (!isProfesor) {
+        payload.id_profesor = idProfesor;
+      }
+
+      await apiClient.createEsquela(payload);
 
       dispatch('created');
       cerrarModal();
@@ -192,11 +268,9 @@
     codigosSeleccionados = [];
     searchEstudiante = '';
     searchProfesor = '';
-    searchRegistrador = '';
     filtroCurso = null;
     estudianteSeleccionado = null;
     profesorSeleccionado = null;
-    registradorSeleccionado = null;
     error = '';
   }
 
@@ -212,7 +286,6 @@
     if (!target.closest('.dropdown-container')) {
       showEstudianteDropdown = false;
       showProfesorDropdown = false;
-      showRegistradorDropdown = false;
     }
   }
 </script>
@@ -278,24 +351,37 @@
                   </button>
                 {/if}
               </div>
-              {#if showEstudianteDropdown && filtrarEstudiantes().length > 0}
-                <div class="dropdown">
-                  {#each filtrarEstudiantes() as estudiante}
-                    <div class="dropdown-item" on:click={() => seleccionarEstudiante(estudiante)}>
-                      <div class="item-main">
-                        <strong>{estudiante.nombre_completo}</strong>
-                        <span class="item-detail">CI: {estudiante.ci}</span>
+              {#if showEstudianteDropdown}
+                {#if estudiantesFiltrados.length > 0}
+                  <div class="dropdown">
+                    {#each estudiantesFiltrados as estudiante}
+                      <div class="dropdown-item" on:click={() => seleccionarEstudiante(estudiante)}>
+                        <div class="item-main">
+                          <strong>{estudiante.nombre_completo}</strong>
+                          <span class="item-detail">CI: {estudiante.ci}</span>
+                        </div>
                       </div>
+                    {/each}
+                  </div>
+                {:else}
+                  <div class="dropdown">
+                    <div class="dropdown-item" style="color: #666; cursor: default;">
+                      {#if filtroCurso}
+                        No hay estudiantes en este curso
+                      {:else}
+                        No se encontraron estudiantes
+                      {/if}
                     </div>
-                  {/each}
-                </div>
+                  </div>
+                {/if}
               {/if}
             </div>
           </div>
 
-          <!-- Profesor -->
+          <!-- Profesor que manda la esquela - Solo visible para Regente/Administrativo -->
+        {#if mostrarCampoProfesor}
           <div class="form-group">
-            <label>Profesor *</label>
+            <label>Profesor que manda la esquela *</label>
             <div class="dropdown-container">
               <div class="input-with-clear">
                 <input
@@ -332,47 +418,9 @@
               {/if}
             </div>
           </div>
+        {/if}
 
-          <!-- Registrador -->
-          <div class="form-group">
-            <label>Registrador *</label>
-            <div class="dropdown-container">
-              <div class="input-with-clear">
-                <input
-                  type="text"
-                  placeholder="Buscar registrador por nombre o cédula..."
-                  bind:value={searchRegistrador}
-                  on:focus={() => showRegistradorDropdown = true}
-                  on:input={() => showRegistradorDropdown = true}
-                  class="search-input"
-                  class:selected={registradorSeleccionado}
-                />
-                {#if registradorSeleccionado}
-                  <button 
-                    type="button" 
-                    class="clear-btn" 
-                    on:click={deseleccionarRegistrador}
-                    title="Limpiar selección"
-                  >
-                    ✕
-                  </button>
-                {/if}
-              </div>
-              {#if showRegistradorDropdown && filtrarRegistradores().length > 0}
-                <div class="dropdown">
-                  {#each filtrarRegistradores() as registrador}
-                    <div class="dropdown-item" on:click={() => seleccionarRegistrador(registrador)}>
-                      <div class="item-main">
-                        <strong>{registrador.nombre_completo}</strong>
-                        <span class="item-detail">CI: {registrador.ci} | Tel: {registrador.telefono}</span>
-                      </div>
-                    </div>
-                  {/each}
-                </div>
-              {/if}
-            </div>
-          </div>
-
+          <!-- Fecha -->
           <div class="form-group">
             <label for="fecha">Fecha *</label>
             <input 
@@ -450,6 +498,34 @@
     max-height: 90vh;
     overflow-y: auto;
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  }
+
+  @media (max-width: 640px) {
+    .modal {
+      width: 95%;
+      max-height: 95vh;
+      border-radius: 8px;
+    }
+
+    .modal-header {
+      padding: 1rem;
+    }
+
+    .modal-content {
+      padding: 1rem;
+    }
+
+    .form-actions {
+      flex-direction: column;
+    }
+
+    .btn {
+      width: 100%;
+    }
+
+    .codigos-grid {
+      max-height: 150px;
+    }
   }
 
   .modal-header {
@@ -691,25 +767,30 @@
     background: white;
     border: 1px solid #e2e8f0;
     border-radius: 8px;
-    max-height: 250px;
+    max-height: 320px;
     overflow-y: auto;
     z-index: 1000;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-    margin-top: 2px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+    margin-top: 4px;
   }
 
   .dropdown-item {
-    padding: 0.875rem;
+    padding: 1rem;
     cursor: pointer;
     border-bottom: 1px solid #f1f5f9;
-    transition: background-color 0.2s;
+    transition: all 0.15s ease;
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
   }
 
   .dropdown-item:hover {
-    background: #f8fafc;
+    background: #f0f9ff;
+    transform: translateX(2px);
+  }
+
+  .dropdown-item:active {
+    background: #e0f2fe;
   }
 
   .dropdown-item:last-child {
