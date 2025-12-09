@@ -91,12 +91,14 @@
       loading = true;
       const params: any = {};
       if (nameFilter) params.name = nameFilter;
-      if (selectedCourse) params.course = selectedCourse;
+      if (selectedCourse) params.course_id = selectedCourse;
       if (typeFilter) params.type = typeFilter;
       if (dateFrom) params.from = dateFrom;
       if (dateTo) params.to = dateTo;
       if (selectedYear) params.year = selectedYear;
       if (selectedMonth) params.month = selectedMonth;
+
+      console.log('🔍 Cargando esquelas con params:', params);
 
       const [esquelasData, codigosData] = await Promise.all([
         apiClient.getEsquelas(params),
